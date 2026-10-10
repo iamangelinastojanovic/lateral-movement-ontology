@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+
+# Generated data and warehouses — rebuilt from code, never committed
+data/
+
+# Local notes and working material, not part of the deliverable
+docs/vodic-*.md
+docs/part*-plan.md
+docs/interview.md
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,106 @@
+name: tests
+
+# The point of the matrix is not thoroughness for its own sake. The pipeline
+# reads and writes text files, and Python's default text encoding differs by
+# platform -- UTF-8 on Linux, usually cp1252 on Windows. That difference is
+# invisible on ASCII data, which the LANL dataset happens to be, so it stays
+# hidden until the first non-ASCII byte and then only breaks for whoever is on
+# the other operating system. Running both here means nobody has to reproduce
+# a defect they cannot see.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} · python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Do not cancel the other platform when one fails -- knowing whether a
+      # failure is platform-specific is most of the diagnosis.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Unit tests
+        run: pytest -q
+
+      # The tests above call main() in-process. This exercises the installed
+      # console script, which on Windows is a generated .exe shim -- a broken
+      # entry point or a packaging mistake shows up only here.
+      - name: Console script and python -m lmo
+        run: |
+          python -m lmo --help
+          lmo --help
+
+      - name: Smoke test the installed CLI
+        shell: bash
+        run: |
+          lmo generate --preset tiny --out data/raw/smoke --seed 4242
+          lmo ingest --source data/raw/smoke --reset --report data/reports/ci.json
+          lmo profile
+          lmo quarantine
+          python scripts/ci_check.py data/reports/ci.json
+          lmo build-graph
+          lmo detect
+          lmo incidents --limit 5
+          lmo evaluate --source data/raw/smoke --budget 25
+          AID=$(python -c "
+from lmo.ingest.engine import Warehouse
+with Warehouse('data/warehouse/lmo.duckdb', read_only=True) as w:
+    print(w.sql('SELECT alert_uid FROM alerts LIMIT 1')[0][0])
+")
+          lmo decide --alert-uid "$AID" --action inconclusive --note "ci smoke"
+          lmo audit
+          lmo pack --alert-uid "$AID" --out data/reports/ci-case.json
+          lmo verify-pack --in data/reports/ci-case.json
+          lmo export-parquet --out data/parquet/smoke
+          lmo --db data/warehouse/from-pq.duckdb import-parquet --source data/parquet/smoke
+
+      - name: Lineage resolves back to the raw file
+        shell: bash
+        run: |
+          UID_=$(python -c "
+          from lmo.ingest.engine import Warehouse
+          with Warehouse('data/warehouse/lmo.duckdb', read_only=True) as w:
+              print(w.sql(\"SELECT event_uid FROM events WHERE src_dataset='auth' LIMIT 1\")[0][0])
+          ")
+          lmo lineage --event-uid "$UID_" --source data/raw/smoke | tee lineage.txt
+          grep -q "raw " lineage.txt
+
+  encoding:
+    name: ascii locale (encoding guard)
+    runs-on: ubuntu-latest
+
+    # Forces Python's preferred encoding to ASCII, so any text file opened
+    # without an explicit encoding= raises instead of silently depending on the
+    # machine's locale. This is the Linux-side stand-in for what cp1252 does on
+    # Windows, and it fails fast rather than producing mojibake.
+    env:
+      LC_ALL: C
+      LANG: C
+      PYTHONUTF8: "0"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: pytest -q
