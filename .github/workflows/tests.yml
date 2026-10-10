@@ -60,11 +60,11 @@ jobs:
           lmo detect
           lmo incidents --limit 5
           lmo evaluate --source data/raw/smoke --budget 25
-          AID=$(python -c "
-from lmo.ingest.engine import Warehouse
-with Warehouse('data/warehouse/lmo.duckdb', read_only=True) as w:
-    print(w.sql('SELECT alert_uid FROM alerts LIMIT 1')[0][0])
-")
+          # Kept to a single line on purpose. A multi-line python -c inside a
+          # YAML block scalar has to carry the block's indentation; written
+          # flush-left it silently ends the block and GitHub rejects the whole
+          # file with "error in your yaml syntax". One line cannot have that bug.
+          AID=$(python -c "from lmo.ingest.engine import Warehouse; w = Warehouse('data/warehouse/lmo.duckdb', read_only=True); print(w.sql('SELECT alert_uid FROM alerts LIMIT 1')[0][0])")
           lmo decide --alert-uid "$AID" --action inconclusive --note "ci smoke"
           lmo audit
           lmo pack --alert-uid "$AID" --out data/reports/ci-case.json
@@ -75,11 +75,7 @@ with Warehouse('data/warehouse/lmo.duckdb', read_only=True) as w:
       - name: Lineage resolves back to the raw file
         shell: bash
         run: |
-          UID_=$(python -c "
-          from lmo.ingest.engine import Warehouse
-          with Warehouse('data/warehouse/lmo.duckdb', read_only=True) as w:
-              print(w.sql(\"SELECT event_uid FROM events WHERE src_dataset='auth' LIMIT 1\")[0][0])
-          ")
+          UID_=$(python -c "from lmo.ingest.engine import Warehouse; w = Warehouse('data/warehouse/lmo.duckdb', read_only=True); print(w.sql(\"SELECT event_uid FROM events WHERE src_dataset='auth' LIMIT 1\")[0][0])")
           lmo lineage --event-uid "$UID_" --source data/raw/smoke | tee lineage.txt
           grep -q "raw " lineage.txt
 
